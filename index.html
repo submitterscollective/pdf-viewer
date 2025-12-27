@@ -14,6 +14,9 @@
       --btn:rgba(255,255,255,.10);
       --btnHover:rgba(255,255,255,.16);
       --btnBorder:rgba(255,255,255,.18);
+      --bad:#ff5f5f;
+      --ok:#4dffa8;
+      --warn:#ffd44d;
     }
     html,body{height:100%;margin:0;background:var(--bg);}
 
@@ -27,23 +30,21 @@
       color:var(--text);
       font:600 13px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
     }
-    #bar .left, #bar .right{
-      display:flex; gap:8px; align-items:center; flex-wrap:wrap;
-    }
+    #bar .left, #bar .right{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     #title{
       max-width:38vw;
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
       color:var(--muted);
-      font-weight:700;
+      font-weight:800;
     }
 
-    button, a.btn {
+    button, a.btn{
       border:1px solid var(--btnBorder);
       background:var(--btn);
       color:var(--text);
       border-radius:12px;
       padding:8px 10px;
-      font:700 12px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+      font:800 12px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
       cursor:pointer;
       transition:transform .12s ease, background .12s ease;
       text-decoration:none;
@@ -51,9 +52,8 @@
       user-select:none;
       will-change:transform;
     }
-    button:hover, a.btn:hover { transform:translateY(-1px); background:var(--btnHover); }
-    button:active, a.btn:active { transform:translateY(0); }
-
+    button:hover, a.btn:hover{ transform:translateY(-1px); background:var(--btnHover); }
+    button:active, a.btn:active{ transform:translateY(0); }
     input[type="range"]{ width:180px; }
 
     #wrap{
@@ -65,25 +65,42 @@
     }
     #wrap:active{ cursor:grabbing; }
 
-    #stage{
-      display:flex; justify-content:center;
-      padding:18px 14px 70px;
-    }
+    #stage{ display:flex; justify-content:center; padding:18px 14px 88px; }
 
     canvas{
       border-radius:14px;
       box-shadow:0 16px 50px rgba(0,0,0,.55);
       background:#fff;
-      image-rendering:auto;
     }
 
     #hint{
       position:fixed; bottom:12px; left:12px; right:12px; z-index:10;
       color:var(--muted);
-      font:500 12px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+      font:600 12px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
       text-align:center;
       pointer-events:none;
     }
+
+    #errorBox{
+      position:fixed;
+      left:12px; right:12px;
+      bottom:48px;
+      z-index:11;
+      padding:12px 14px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.16);
+      background:rgba(0,0,0,.62);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      color:var(--text);
+      font:600 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      display:none;
+      white-space:pre-wrap;
+      word-break:break-word;
+    }
+    #errorBox b{ color:var(--warn); }
+    .ok{ color:var(--ok); }
+    .bad{ color:var(--bad); }
 
     @media (max-width:560px){
       input[type="range"]{ width:120px; }
@@ -99,7 +116,7 @@
       <button id="prev" title="Previous page">◀</button>
       <button id="next" title="Next page">▶</button>
       <span id="page">Page —</span>
-      <span id="title">Chapter 7</span>
+      <span id="title">PDF</span>
     </div>
 
     <div class="right">
@@ -108,6 +125,7 @@
       <button id="zoomIn" title="Zoom in">+</button>
       <span id="zoomLabel">120%</span>
       <a id="openPdf" class="btn" target="_blank" rel="noopener">Open PDF</a>
+      <button id="toggleErr" title="Show diagnostics">Diag</button>
     </div>
   </div>
 
@@ -116,19 +134,89 @@
   </div>
 
   <div id="hint">Drag to pan/scroll. Ctrl/⌘ + wheel = zoom. (Fast preview while zooming, sharp render after.)</div>
+  <div id="errorBox"></div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
   <script>
-    // ========= CONFIG =========
-    // Put this file in the SAME folder as index.html in the repo.
-    const PDF_FILE = "./ch7.pdf";
-    const TITLE = "Chapter 7";
+    // =========================
+    // CONFIG
+    // =========================
+    // Default PDF if no ?file= is provided:
+    // Put ch7.pdf next to index.html in the repo.
+    const DEFAULT_PDF = "./ch7.pdf";
+    const DEFAULT_TITLE = "Chapter 7";
 
-    // ========= PDF.js worker =========
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
+    // =========================
+    // Utilities
+    // =========================
+    const qs = new URLSearchParams(location.search);
+    const fileParam = qs.get("file"); // can be absolute URL or relative
+    const titleParam = qs.get("title");
 
-    // ========= Elements =========
+    const PDF_URL = new URL(fileParam || DEFAULT_PDF, location.href).toString();
+    const PDF_TITLE = titleParam || DEFAULT_TITLE;
+
+    const errorBox = document.getElementById("errorBox");
+    const toggleErr = document.getElementById("toggleErr");
+    let errOpen = false;
+    toggleErr.onclick = () => {
+      errOpen = !errOpen;
+      errorBox.style.display = errOpen ? "block" : "none";
+    };
+
+    function showErr(msg){
+      errorBox.textContent = msg;
+      errorBox.style.display = "block";
+      errOpen = true;
+    }
+
+    function status(msg){ document.getElementById("hint").textContent = msg; }
+
+    async function loadScript(src){
+      return new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = src;
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error("Failed to load script: " + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensurePdfJs(){
+      // Try cdnjs, then fallback to jsdelivr
+      try{
+        await loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js");
+      }catch(e1){
+        await loadScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js");
+      }
+      if (!window.pdfjsLib) throw new Error("pdfjsLib not available after loading scripts.");
+      // Worker (try both CDNs)
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
+    }
+
+    async function fetchBytes(url){
+      const res = await fetch(url, { cache: "no-store" });
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      const info =
+        `URL: ${url}\nHTTP: ${res.status} ${res.statusText}\nContent-Type: ${ct || "(none)"}`;
+
+      if (!res.ok){
+        throw new Error("Fetch failed.\n" + info + "\n\nFix: make sure the PDF is really at that exact URL (name/path/case).");
+      }
+
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength < 1000){
+        // Sometimes you fetched an HTML error page (tiny) instead of a PDF.
+        throw new Error("Fetched too few bytes (likely not a PDF file).\n" + info);
+      }
+
+      return new Uint8Array(buf);
+    }
+
+    // =========================
+    // Viewer state
+    // =========================
     const wrap = document.getElementById("wrap");
     const canvas = document.getElementById("c");
     const ctx = canvas.getContext("2d", { alpha: false });
@@ -138,40 +226,22 @@
     const elZoom = document.getElementById("zoom");
     const elZoomLabel = document.getElementById("zoomLabel");
     const elOpen = document.getElementById("openPdf");
-    const hint = document.getElementById("hint");
 
-    elTitle.textContent = TITLE;
-    elOpen.href = PDF_FILE;
+    elTitle.textContent = PDF_TITLE;
+    elOpen.href = PDF_URL;
 
-    // ========= State =========
     let pdfDoc = null;
     let pageNum = 1;
     let scale = 1.2;
-
-    // “Fast while interacting, sharp after”:
-    let settleTimer = null;
-    let isInteracting = false;
-
-    // Render queue:
     let rendering = false;
     let rerenderRequested = false;
+    let settleTimer = null;
 
-    function status(msg){ hint.textContent = msg; }
-
-    async function fetchPdfBytes(url){
-      // Same-origin (GitHub Pages) => fast + reliable.
-      const res = await fetch(url, { cache: "force-cache" });
-      if (!res.ok) throw new Error(`PDF fetch failed: ${res.status} ${res.statusText}`);
-      return new Uint8Array(await res.arrayBuffer());
-    }
-
-    function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
     async function render(quality){
-      // quality: "fast" uses dpr=1; "sharp" uses devicePixelRatio
       if (!pdfDoc) return;
-
-      if (rendering) { rerenderRequested = true; return; }
+      if (rendering){ rerenderRequested = true; return; }
       rendering = true;
 
       try{
@@ -195,24 +265,17 @@
         elZoom.value = Math.round(scale * 100);
       } finally {
         rendering = false;
-        if (rerenderRequested) {
+        if (rerenderRequested){
           rerenderRequested = false;
-          // If something queued up, render sharp (final state)
           render("sharp");
         }
       }
     }
 
     function requestFastThenSharp(){
-      // Fast render immediately, then sharp render after user stops.
-      isInteracting = true;
       render("fast");
-
       clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        isInteracting = false;
-        render("sharp");
-      }, 140);
+      settleTimer = setTimeout(() => render("sharp"), 140);
     }
 
     function setScale(next){
@@ -220,49 +283,7 @@
       requestFastThenSharp();
     }
 
-    async function start(){
-      try{
-        status("Loading PDF…");
-        const data = await fetchPdfBytes(PDF_FILE);
-
-        // Load from bytes (fast + avoids weird redirects/CORS entirely)
-        const task = pdfjsLib.getDocument({ data, disableAutoFetch: true, disableStream: true });
-        pdfDoc = await task.promise;
-
-        status("Drag to pan/scroll. Ctrl/⌘ + wheel = zoom.");
-        await render("sharp");
-      }catch(err){
-        console.error(err);
-        status("PDF failed to load. Most common cause: ch7.pdf not found next to index.html (wrong name/case/path).");
-      }
-    }
-
-    // ========= Controls =========
-    document.getElementById("prev").onclick = () => {
-      if (!pdfDoc || pageNum <= 1) return;
-      pageNum--;
-      requestFastThenSharp();
-    };
-
-    document.getElementById("next").onclick = () => {
-      if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
-      pageNum++;
-      requestFastThenSharp();
-    };
-
-    document.getElementById("zoomIn").onclick = () => setScale(scale + 0.12);
-    document.getElementById("zoomOut").onclick = () => setScale(scale - 0.12);
-    elZoom.oninput = () => setScale(Number(elZoom.value) / 100);
-
-    // Smooth zoom: Ctrl/⌘ + wheel (matches browser expectations)
-    wrap.addEventListener("wheel", (e) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      const dir = Math.sign(e.deltaY);
-      setScale(scale + (dir > 0 ? -0.08 : 0.08));
-    }, { passive:false });
-
-    // Drag-to-pan (makes it feel “app-like”)
+    // Drag-to-pan
     let drag = { on:false, x:0, y:0, sx:0, sy:0 };
     wrap.addEventListener("pointerdown", (e) => {
       drag.on = true;
@@ -280,23 +301,78 @@
     wrap.addEventListener("pointerup", () => { drag.on = false; });
     wrap.addEventListener("pointercancel", () => { drag.on = false; });
 
-    // Keyboard
-    window.addEventListener("keydown", (e) => {
-      if (!pdfDoc) return;
-      if (e.key === "ArrowRight") { if (pageNum < pdfDoc.numPages) { pageNum++; requestFastThenSharp(); } }
-      if (e.key === "ArrowLeft")  { if (pageNum > 1) { pageNum--; requestFastThenSharp(); } }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=")) { e.preventDefault(); setScale(scale + 0.12); }
-      if ((e.ctrlKey || e.metaKey) && e.key === "-") { e.preventDefault(); setScale(scale - 0.12); }
-    });
+    // Zoom: ctrl/cmd wheel
+    wrap.addEventListener("wheel", (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const dir = Math.sign(e.deltaY);
+      setScale(scale + (dir > 0 ? -0.08 : 0.08));
+    }, { passive:false });
 
-    // Keep it crisp on resize (re-fit current state)
+    // Buttons/slider
+    document.getElementById("prev").onclick = () => {
+      if (!pdfDoc || pageNum <= 1) return;
+      pageNum--;
+      requestFastThenSharp();
+    };
+    document.getElementById("next").onclick = () => {
+      if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
+      pageNum++;
+      requestFastThenSharp();
+    };
+    document.getElementById("zoomIn").onclick = () => setScale(scale + 0.12);
+    document.getElementById("zoomOut").onclick = () => setScale(scale - 0.12);
+    elZoom.oninput = () => setScale(Number(elZoom.value) / 100);
+
     window.addEventListener("resize", () => {
-      // Don’t spam: just render sharp once
       clearTimeout(settleTimer);
       settleTimer = setTimeout(() => render("sharp"), 120);
     });
 
-    start();
+    // =========================
+    // Boot
+    // =========================
+    (async function boot(){
+      try{
+        status("Loading viewer…");
+        await ensurePdfJs();
+
+        // IMPORTANT: for fallback worker CDN, set if cdnjs worker fails later
+        // (pdfjs will fetch worker when needed)
+
+        status("Fetching PDF…");
+        const data = await fetchBytes(PDF_URL);
+
+        status("Opening PDF…");
+        const task = pdfjsLib.getDocument({
+          data,
+          disableAutoFetch: true,
+          disableStream: true,
+          withCredentials: false
+        });
+
+        pdfDoc = await task.promise;
+
+        status("Ready. Drag to pan. Ctrl/⌘ + wheel to zoom.");
+        await render("sharp");
+      }catch(err){
+        console.error(err);
+        status("Viewer failed. Open Diag for the exact error.");
+        showErr(
+          "PDF Viewer Diagnostic\n" +
+          "=====================\n" +
+          `Title: ${PDF_TITLE}\n` +
+          `PDF_URL: ${PDF_URL}\n\n` +
+          "Error:\n" + (err && err.message ? err.message : String(err)) + "\n\n" +
+          "Fast fixes:\n" +
+          "1) Confirm the PDF is actually reachable in a browser at the PDF_URL.\n" +
+          "2) Make sure the filename is EXACT (case-sensitive) and ends with .pdf.\n" +
+          "3) If using relative file: upload ch7.pdf next to index.html in the repo.\n" +
+          "4) Try forcing the PDF via query param:\n" +
+          "   ?file=./ch7.pdf\n"
+        );
+      }
+    })();
   </script>
 </body>
 </html>
