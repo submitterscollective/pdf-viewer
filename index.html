@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Fast PDF Viewer</title>
+  <title>PDF Viewer</title>
   <style>
     :root{
       --bg:#0b0c10;
@@ -50,10 +50,10 @@
       text-decoration:none;
       display:inline-flex; align-items:center; justify-content:center;
       user-select:none;
-      will-change:transform;
     }
     button:hover, a.btn:hover{ transform:translateY(-1px); background:var(--btnHover); }
     button:active, a.btn:active{ transform:translateY(0); }
+
     input[type="range"]{ width:180px; }
 
     #wrap{
@@ -64,9 +64,7 @@
       cursor:grab;
     }
     #wrap:active{ cursor:grabbing; }
-
     #stage{ display:flex; justify-content:center; padding:18px 14px 88px; }
-
     canvas{
       border-radius:14px;
       box-shadow:0 16px 50px rgba(0,0,0,.55);
@@ -99,8 +97,6 @@
       word-break:break-word;
     }
     #errorBox b{ color:var(--warn); }
-    .ok{ color:var(--ok); }
-    .bad{ color:var(--bad); }
 
     @media (max-width:560px){
       input[type="range"]{ width:120px; }
@@ -125,7 +121,7 @@
       <button id="zoomIn" title="Zoom in">+</button>
       <span id="zoomLabel">120%</span>
       <a id="openPdf" class="btn" target="_blank" rel="noopener">Open PDF</a>
-      <button id="toggleErr" title="Show diagnostics">Diag</button>
+      <button id="diag" title="Show diagnostics">Diag</button>
     </div>
   </div>
 
@@ -133,175 +129,115 @@
     <div id="stage"><canvas id="c"></canvas></div>
   </div>
 
-  <div id="hint">Drag to pan/scroll. Ctrl/⌘ + wheel = zoom. (Fast preview while zooming, sharp render after.)</div>
+  <div id="hint">Loading…</div>
   <div id="errorBox"></div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
   <script>
-    // =========================
-    // CONFIG
-    // =========================
-    // Default PDF if no ?file= is provided:
-    // Put ch7.pdf next to index.html in the repo.
-    const DEFAULT_PDF = "https://drive.google.com/file/d/1kA05Dp_ZzAvvufbSLKES6jd6HqFIDzqJ/view?usp=drive_link";
-    const DEFAULT_TITLE = "Chapter 7";
+    // ====== CHANGE THESE IF YOU WANT ======
+    const PDF_TITLE = "Chapter 7";
+    const CANDIDATES = ["./ch7.pdf", "./ch7", "./ch7.PDF"]; // tries in order
 
-    // =========================
-    // Utilities
-    // =========================
-    const qs = new URLSearchParams(location.search);
-    const fileParam = qs.get("file"); // can be absolute URL or relative
-    const titleParam = qs.get("title");
+    // Worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
 
-    const PDF_URL = new URL(fileParam || DEFAULT_PDF, location.href).toString();
-    const PDF_TITLE = titleParam || DEFAULT_TITLE;
-
-    const errorBox = document.getElementById("errorBox");
-    const toggleErr = document.getElementById("toggleErr");
-    let errOpen = false;
-    toggleErr.onclick = () => {
-      errOpen = !errOpen;
-      errorBox.style.display = errOpen ? "block" : "none";
-    };
-
-    function showErr(msg){
-      errorBox.textContent = msg;
-      errorBox.style.display = "block";
-      errOpen = true;
-    }
-
-    function status(msg){ document.getElementById("hint").textContent = msg; }
-
-    async function loadScript(src){
-      return new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = src;
-        s.async = true;
-        s.onload = resolve;
-        s.onerror = () => reject(new Error("Failed to load script: " + src));
-        document.head.appendChild(s);
-      });
-    }
-
-    async function ensurePdfJs(){
-      // Try cdnjs, then fallback to jsdelivr
-      try{
-        await loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js");
-      }catch(e1){
-        await loadScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js");
-      }
-      if (!window.pdfjsLib) throw new Error("pdfjsLib not available after loading scripts.");
-      // Worker (try both CDNs)
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
-    }
-
-    async function fetchBytes(url){
-      const res = await fetch(url, { cache: "no-store" });
-      const ct = (res.headers.get("content-type") || "").toLowerCase();
-      const info =
-        `URL: ${url}\nHTTP: ${res.status} ${res.statusText}\nContent-Type: ${ct || "(none)"}`;
-
-      if (!res.ok){
-        throw new Error("Fetch failed.\n" + info + "\n\nFix: make sure the PDF is really at that exact URL (name/path/case).");
-      }
-
-      const buf = await res.arrayBuffer();
-      if (buf.byteLength < 1000){
-        // Sometimes you fetched an HTML error page (tiny) instead of a PDF.
-        throw new Error("Fetched too few bytes (likely not a PDF file).\n" + info);
-      }
-
-      return new Uint8Array(buf);
-    }
-
-    // =========================
-    // Viewer state
-    // =========================
+    // Elements
     const wrap = document.getElementById("wrap");
     const canvas = document.getElementById("c");
-    const ctx = canvas.getContext("2d", { alpha: false });
+    const ctx = canvas.getContext("2d", { alpha:false });
 
     const elTitle = document.getElementById("title");
     const elPage = document.getElementById("page");
     const elZoom = document.getElementById("zoom");
     const elZoomLabel = document.getElementById("zoomLabel");
     const elOpen = document.getElementById("openPdf");
+    const hint = document.getElementById("hint");
+    const errorBox = document.getElementById("errorBox");
+    const diagBtn = document.getElementById("diag");
 
     elTitle.textContent = PDF_TITLE;
-    elOpen.href = PDF_URL;
 
+    let diagOpen = false;
+    diagBtn.onclick = () => {
+      diagOpen = !diagOpen;
+      errorBox.style.display = diagOpen ? "block" : "none";
+    };
+    function status(msg){ hint.textContent = msg; }
+    function showErr(msg){
+      errorBox.textContent = msg;
+      errorBox.style.display = "block";
+      diagOpen = true;
+    }
+
+    async function exists(url){
+      // Use GET (HEAD can be flaky on some hosts)
+      const res = await fetch(url, { method:"GET", cache:"no-store" });
+      const ct = (res.headers.get("content-type")||"").toLowerCase();
+      return { ok: res.ok, status: res.status, statusText: res.statusText, contentType: ct, url };
+    }
+
+    async function pickPdfUrl(){
+      let report = "PDF URL probe:\n";
+      for (const rel of CANDIDATES){
+        const u = new URL(rel, location.href).toString();
+        const r = await exists(u);
+        report += `- ${u}\n  -> ${r.ok ? "OK" : "FAIL"} (${r.status} ${r.statusText}) ct=${r.contentType||"(none)"}\n`;
+        if (r.ok) return { url: u, report };
+      }
+      return { url: null, report };
+    }
+
+    // Viewer state
     let pdfDoc = null;
     let pageNum = 1;
     let scale = 1.2;
     let rendering = false;
-    let rerenderRequested = false;
-    let settleTimer = null;
+    let queued = false;
 
-    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
-
-    async function render(quality){
-      if (!pdfDoc) return;
-      if (rendering){ rerenderRequested = true; return; }
+    async function render(){
+      if (!pdfDoc || rendering){ queued = true; return; }
       rendering = true;
 
-      try{
-        const page = await pdfDoc.getPage(pageNum);
-        const viewport = page.getViewport({ scale });
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale });
 
-        const dpr = (quality === "sharp") ? (window.devicePixelRatio || 1) : 1;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = viewport.width + "px";
+      canvas.style.height = viewport.height + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        canvas.width = Math.floor(viewport.width * dpr);
-        canvas.height = Math.floor(viewport.height * dpr);
-        canvas.style.width = viewport.width + "px";
-        canvas.style.height = viewport.height + "px";
+      await page.render({ canvasContext: ctx, viewport }).promise;
 
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.imageSmoothingEnabled = true;
+      elPage.textContent = `Page ${pageNum} / ${pdfDoc.numPages}`;
+      elZoomLabel.textContent = `${Math.round(scale * 100)}%`;
+      elZoom.value = Math.round(scale * 100);
 
-        await page.render({ canvasContext: ctx, viewport }).promise;
-
-        elPage.textContent = `Page ${pageNum} / ${pdfDoc.numPages}`;
-        elZoomLabel.textContent = `${Math.round(scale * 100)}%`;
-        elZoom.value = Math.round(scale * 100);
-      } finally {
-        rendering = false;
-        if (rerenderRequested){
-          rerenderRequested = false;
-          render("sharp");
-        }
-      }
-    }
-
-    function requestFastThenSharp(){
-      render("fast");
-      clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => render("sharp"), 140);
+      rendering = false;
+      if (queued){ queued = false; render(); }
     }
 
     function setScale(next){
-      scale = clamp(next, 0.5, 2.5);
-      requestFastThenSharp();
+      scale = Math.max(0.5, Math.min(2.5, next));
+      render();
     }
 
-    // Drag-to-pan
-    let drag = { on:false, x:0, y:0, sx:0, sy:0 };
-    wrap.addEventListener("pointerdown", (e) => {
-      drag.on = true;
-      drag.x = e.clientX; drag.y = e.clientY;
-      drag.sx = wrap.scrollLeft; drag.sy = wrap.scrollTop;
-      wrap.setPointerCapture(e.pointerId);
-    });
-    wrap.addEventListener("pointermove", (e) => {
-      if (!drag.on) return;
-      const dx = e.clientX - drag.x;
-      const dy = e.clientY - drag.y;
-      wrap.scrollLeft = drag.sx - dx;
-      wrap.scrollTop = drag.sy - dy;
-    });
-    wrap.addEventListener("pointerup", () => { drag.on = false; });
-    wrap.addEventListener("pointercancel", () => { drag.on = false; });
+    // Controls
+    document.getElementById("prev").onclick = () => {
+      if (!pdfDoc || pageNum <= 1) return;
+      pageNum--; render();
+    };
+    document.getElementById("next").onclick = () => {
+      if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
+      pageNum++; render();
+    };
+    document.getElementById("zoomIn").onclick = () => setScale(scale + 0.12);
+    document.getElementById("zoomOut").onclick = () => setScale(scale - 0.12);
+    elZoom.oninput = () => setScale(Number(elZoom.value) / 100);
 
-    // Zoom: ctrl/cmd wheel
+    // Ctrl/⌘ + wheel zoom
     wrap.addEventListener("wheel", (e) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
@@ -309,68 +245,31 @@
       setScale(scale + (dir > 0 ? -0.08 : 0.08));
     }, { passive:false });
 
-    // Buttons/slider
-    document.getElementById("prev").onclick = () => {
-      if (!pdfDoc || pageNum <= 1) return;
-      pageNum--;
-      requestFastThenSharp();
-    };
-    document.getElementById("next").onclick = () => {
-      if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
-      pageNum++;
-      requestFastThenSharp();
-    };
-    document.getElementById("zoomIn").onclick = () => setScale(scale + 0.12);
-    document.getElementById("zoomOut").onclick = () => setScale(scale - 0.12);
-    elZoom.oninput = () => setScale(Number(elZoom.value) / 100);
-
-    window.addEventListener("resize", () => {
-      clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => render("sharp"), 120);
-    });
-
-    // =========================
     // Boot
-    // =========================
-    (async function boot(){
+    (async () => {
       try{
-        status("Loading viewer…");
-        await ensurePdfJs();
+        status("Finding PDF…");
+        const picked = await pickPdfUrl();
 
-        // IMPORTANT: for fallback worker CDN, set if cdnjs worker fails later
-        // (pdfjs will fetch worker when needed)
+        if (!picked.url){
+          status("PDF not found. Click Diag.");
+          showErr(picked.report + "\nFix: upload the PDF to this repo and name it exactly ch7.pdf (or change CANDIDATES).");
+          return;
+        }
 
-        status("Fetching PDF…");
-        const data = await fetchBytes(PDF_URL);
+        // set Open PDF link to the real working file
+        elOpen.href = picked.url;
 
-        status("Opening PDF…");
-        const task = pdfjsLib.getDocument({
-          data,
-          disableAutoFetch: true,
-          disableStream: true,
-          withCredentials: false
-        });
-
+        status("Loading PDF…");
+        const task = pdfjsLib.getDocument({ url: picked.url, withCredentials:false });
         pdfDoc = await task.promise;
 
-        status("Ready. Drag to pan. Ctrl/⌘ + wheel to zoom.");
-        await render("sharp");
+        status("Ready. Ctrl/⌘ + wheel to zoom.");
+        await render();
       }catch(err){
         console.error(err);
-        status("Viewer failed. Open Diag for the exact error.");
-        showErr(
-          "PDF Viewer Diagnostic\n" +
-          "=====================\n" +
-          `Title: ${PDF_TITLE}\n` +
-          `PDF_URL: ${PDF_URL}\n\n` +
-          "Error:\n" + (err && err.message ? err.message : String(err)) + "\n\n" +
-          "Fast fixes:\n" +
-          "1) Confirm the PDF is actually reachable in a browser at the PDF_URL.\n" +
-          "2) Make sure the filename is EXACT (case-sensitive) and ends with .pdf.\n" +
-          "3) If using relative file: upload ch7.pdf next to index.html in the repo.\n" +
-          "4) Try forcing the PDF via query param:\n" +
-          "   ?file=./ch7.pdf\n"
-        );
+        status("Failed. Click Diag.");
+        showErr("Viewer error:\n" + (err?.message || String(err)));
       }
     })();
   </script>
