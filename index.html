@@ -14,6 +14,9 @@
       --btn:rgba(255,255,255,.10);
       --btnHover:rgba(255,255,255,.16);
       --btnBorder:rgba(255,255,255,.18);
+      --danger: rgba(255, 80, 80, .92);
+      --ok: rgba(80, 255, 170, .92);
+      --warn: rgba(255, 210, 80, .92);
     }
     html,body{height:100%;margin:0;background:var(--bg);}
 
@@ -65,7 +68,7 @@
     }
     #stage{
       display:flex; justify-content:center;
-      padding:18px 14px 50px;
+      padding:18px 14px 70px;
     }
     canvas{
       border-radius:14px;
@@ -80,6 +83,35 @@
       font:500 12px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
       text-align:center;
       pointer-events:none;
+    }
+
+    /* Debug panel (shows exactly what's wrong) */
+    #debug{
+      position:fixed;
+      left:12px; right:12px;
+      bottom:44px;
+      z-index:11;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid var(--panelBorder);
+      background:rgba(0,0,0,.55);
+      color:var(--text);
+      font:600 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      display:none;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      white-space:pre-wrap;
+      word-break:break-word;
+    }
+    #debug strong{ color: var(--warn); }
+    #debug .ok{ color: var(--ok); }
+    #debug .bad{ color: var(--danger); }
+    #debug .muted{ color: rgba(255,255,255,.62); }
+    #debugToggle{
+      position:fixed;
+      bottom:12px;
+      right:12px;
+      z-index:12;
     }
 
     @media (max-width:560px){
@@ -114,138 +146,182 @@
 
   <div id="hint">Tip: Ctrl/⌘ + mouse wheel = smooth zoom. Trackpad pinch-to-zoom also works in many browsers.</div>
 
+  <button id="debugToggle" class="btn" type="button">Debug</button>
+  <div id="debug"></div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
-<script>
-  // ====== CONFIG ======
-  // Put the PDF in the SAME repo folder as index.html and name it exactly: ch7.pdf
-  // Then this relative path works:
-  const PDF_URL = new URL("./ch7.pdf", window.location.href).toString();
-  const PDF_TITLE = "Chapter 7";
+  <script>
+    // =========================
+    // CONFIG (EDIT THIS ONLY)
+    // =========================
+    // Put "ch7.pdf" in the SAME folder as this index.html in your GitHub repo.
+    // Then this will resolve to: https://submitterscollective.github.io/pdf-viewer/ch7.pdf
+    const PDF_FILENAME = "ch7.pdf";
+    const PDF_TITLE = "Chapter 7";
 
-  // ====== PDF.js worker ======
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
+    // =========================
+    // Setup / Elements
+    // =========================
+    const PDF_URL = new URL("./" + PDF_FILENAME, window.location.href).toString();
 
-  // ====== Elements ======
-  const canvas = document.getElementById("c");
-  const ctx = canvas.getContext("2d");
+    const debugEl = document.getElementById("debug");
+    const debugToggle = document.getElementById("debugToggle");
+    let debugOpen = false;
 
-  const elPage = document.getElementById("page");
-  const elZoom = document.getElementById("zoom");
-  const elZoomLabel = document.getElementById("zoomLabel");
-  const elTitle = document.getElementById("title");
-  const elOpen = document.getElementById("openPdf");
-  const wrap = document.getElementById("wrap");
-  const hint = document.getElementById("hint");
-
-  elTitle.textContent = PDF_TITLE;
-  elOpen.href = PDF_URL;
-
-  // ====== State ======
-  let pdfDoc = null;
-  let pageNum = 1;
-  let scale = 1.2;
-  let rendering = false;
-  let queued = false;
-
-  function showStatus(msg){
-    hint.textContent = msg;
-  }
-
-  async function verifyPdfReachable(url){
-    // This tells us immediately if the PDF is 404 / wrong path / blocked.
-    // Uses a tiny range request; if the server refuses ranges, it still usually returns 200.
-    const res = await fetch(url, { method: "GET" });
-    if (!res.ok) throw new Error(`PDF fetch failed: ${res.status} ${res.statusText}`);
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
-    // content-type might be application/pdf or octet-stream; both are ok
-    if (!ct.includes("pdf") && !ct.includes("octet-stream")) {
-      // Not fatal, but suspicious
-      console.warn("Unexpected content-type:", ct);
+    function debug(msg){
+      debugEl.innerHTML = msg;
     }
-  }
+    function showDebug(open){
+      debugOpen = open;
+      debugEl.style.display = open ? "block" : "none";
+    }
+    debugToggle.addEventListener("click", () => showDebug(!debugOpen));
 
-  async function render(){
-    if (!pdfDoc || rendering) { queued = true; return; }
-    rendering = true;
+    const canvas = document.getElementById("c");
+    const ctx = canvas.getContext("2d");
 
-    const page = await pdfDoc.getPage(pageNum);
-    const viewport = page.getViewport({ scale });
+    const elPage = document.getElementById("page");
+    const elZoom = document.getElementById("zoom");
+    const elZoomLabel = document.getElementById("zoomLabel");
+    const elTitle = document.getElementById("title");
+    const elOpen = document.getElementById("openPdf");
+    const wrap = document.getElementById("wrap");
+    const hint = document.getElementById("hint");
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(viewport.width * dpr);
-    canvas.height = Math.floor(viewport.height * dpr);
-    canvas.style.width = viewport.width + "px";
-    canvas.style.height = viewport.height + "px";
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    elTitle.textContent = PDF_TITLE;
+    elOpen.href = PDF_URL;
 
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    // PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
 
-    elPage.textContent = `Page ${pageNum} / ${pdfDoc.numPages}`;
-    elZoomLabel.textContent = `${Math.round(scale * 100)}%`;
-    elZoom.value = Math.round(scale * 100);
+    // State
+    let pdfDoc = null;
+    let pageNum = 1;
+    let scale = 1.2;
+    let rendering = false;
+    let queued = false;
 
-    rendering = false;
-    if (queued) { queued = false; render(); }
-  }
+    function showStatus(msg){ hint.textContent = msg; }
 
-  async function start(){
-    try{
+    async function headOrGet(url){
+      // Some servers (or caches) behave weirdly with HEAD, so we try HEAD then GET.
+      try{
+        const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+        if (r.ok) return r;
+      }catch(e){}
+      const r2 = await fetch(url, { method: "GET", cache: "no-store" });
+      return r2;
+    }
+
+    async function verifyPdf(url){
+      const r = await headOrGet(url);
+      const ct = (r.headers.get("content-type") || "").toLowerCase();
+      const ok = r.ok;
+      return { ok, status: r.status, statusText: r.statusText, contentType: ct };
+    }
+
+    async function render(){
+      if (!pdfDoc || rendering) { queued = true; return; }
+      rendering = true;
+
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale });
+
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = viewport.width + "px";
+      canvas.style.height = viewport.height + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      elPage.textContent = `Page ${pageNum} / ${pdfDoc.numPages}`;
+      elZoomLabel.textContent = `${Math.round(scale * 100)}%`;
+      elZoom.value = Math.round(scale * 100);
+
+      rendering = false;
+      if (queued) { queued = false; render(); }
+    }
+
+    function setScale(next){
+      scale = Math.max(0.5, Math.min(3.0, next));
+      render();
+    }
+
+    async function start(){
       showStatus("Loading PDF…");
 
-      // 1) Confirm the URL resolves correctly (this catches 404 instantly)
-      await verifyPdfReachable(PDF_URL);
+      // 1) Verify file exists
+      const check = await verifyPdf(PDF_URL);
 
-      // 2) Load with PDF.js
-      const loadingTask = pdfjsLib.getDocument({
-        url: PDF_URL,
-        withCredentials: false
-      });
+      // Show debug info always (so you can see the real problem)
+      debug(
+`<strong>Debug info</strong>
+URL: <span class="muted">${PDF_URL}</span>
+Fetch: ${check.ok ? '<span class="ok">OK</span>' : '<span class="bad">FAIL</span>'}  (${check.status} ${check.statusText})
+Content-Type: <span class="muted">${check.contentType || '(none)'}</span>
 
-      pdfDoc = await loadingTask.promise;
-      showStatus("Tip: Ctrl/⌘ + mouse wheel = smooth zoom. Trackpad pinch-to-zoom works in many browsers.");
-      await render();
-    }catch(err){
-      console.error(err);
-      showStatus(
-        "PDF did not load. Most common cause: the file is not at /pdf-viewer/ch7.pdf (wrong name, missing .pdf, or wrong folder)."
+If Fetch FAILS:
+- The PDF is not at that URL (wrong name, wrong folder, missing .pdf, or case mismatch).
+- Open the URL above directly in a new tab. It must show/download the PDF.
+
+If Fetch OK but still blank:
+- Open DevTools Console and look for a PDF.js error (usually a corrupted PDF).
+`
       );
+      showDebug(true);
+
+      if (!check.ok){
+        showStatus("PDF not found. Click Debug for the exact URL.");
+        return;
+      }
+
+      try{
+        // 2) Load PDF.js document (no credentials, no cookies)
+        const loadingTask = pdfjsLib.getDocument({ url: PDF_URL, withCredentials: false });
+        pdfDoc = await loadingTask.promise;
+
+        showStatus("Tip: Ctrl/⌘ + mouse wheel = smooth zoom.");
+        await render();
+      }catch(err){
+        console.error(err);
+        showStatus("PDF failed to parse/render. Open Debug + Console for details.");
+      }
     }
-  }
 
-  start();
+    // Controls
+    document.getElementById("prev").onclick = () => {
+      if (!pdfDoc || pageNum <= 1) return;
+      pageNum--; render();
+    };
+    document.getElementById("next").onclick = () => {
+      if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
+      pageNum++; render();
+    };
+    document.getElementById("zoomIn").onclick = () => setScale(scale + 0.12);
+    document.getElementById("zoomOut").onclick = () => setScale(scale - 0.12);
+    elZoom.oninput = () => setScale(Number(elZoom.value) / 100);
 
-  // ====== Controls ======
-  document.getElementById("prev").onclick = () => {
-    if (!pdfDoc || pageNum <= 1) return;
-    pageNum--; render();
-  };
-  document.getElementById("next").onclick = () => {
-    if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
-    pageNum++; render();
-  };
+    // Smooth Ctrl/⌘ + wheel zoom
+    wrap.addEventListener("wheel", (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const direction = Math.sign(e.deltaY);
+      setScale(scale + (direction > 0 ? -0.08 : 0.08));
+    }, { passive:false });
 
-  function setScale(next){
-    scale = Math.max(0.5, Math.min(3.0, next));
-    render();
-  }
-  document.getElementById("zoomIn").onclick = () => setScale(scale + 0.12);
-  document.getElementById("zoomOut").onclick = () => setScale(scale - 0.12);
-  elZoom.oninput = () => setScale(Number(elZoom.value) / 100);
+    // Keyboard
+    window.addEventListener("keydown", (e) => {
+      if (!pdfDoc) return;
+      if (e.key === "ArrowRight") { if (pageNum < pdfDoc.numPages) { pageNum++; render(); } }
+      if (e.key === "ArrowLeft")  { if (pageNum > 1) { pageNum--; render(); } }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=")) { e.preventDefault(); setScale(scale + 0.12); }
+      if ((e.ctrlKey || e.metaKey) && e.key === "-") { e.preventDefault(); setScale(scale - 0.12); }
+    });
 
-  wrap.addEventListener("wheel", (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    e.preventDefault();
-    const direction = Math.sign(e.deltaY);
-    setScale(scale + (direction > 0 ? -0.08 : 0.08));
-  }, { passive:false });
-
-  window.addEventListener("keydown", (e) => {
-    if (!pdfDoc) return;
-    if (e.key === "ArrowRight") { if (pageNum < pdfDoc.numPages) { pageNum++; render(); } }
-    if (e.key === "ArrowLeft")  { if (pageNum > 1) { pageNum--; render(); } }
-    if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=")) { e.preventDefault(); setScale(scale + 0.12); }
-    if ((e.ctrlKey || e.metaKey) && e.key === "-") { e.preventDefault(); setScale(scale - 0.12); }
-  });
-</script>
-  
+    start();
+  </script>
+</body>
+</html>
