@@ -1,4 +1,120 @@
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PDF Viewer</title>
+  <style>
+    :root{
+      --bg:#0b0c10;
+      --panel:rgba(255,255,255,.10);
+      --panelBorder:rgba(255,255,255,.14);
+      --text:rgba(255,255,255,.92);
+      --muted:rgba(255,255,255,.72);
+      --btn:rgba(255,255,255,.10);
+      --btnHover:rgba(255,255,255,.16);
+      --btnBorder:rgba(255,255,255,.18);
+    }
+    html,body{height:100%;margin:0;background:var(--bg);}
+
+    /* Top bar */
+    #bar{
+      position:fixed; top:12px; left:12px; right:12px; z-index:10;
+      display:flex; gap:10px; align-items:center; justify-content:space-between;
+      padding:10px 12px; border-radius:14px;
+      background:var(--panel);
+      border:1px solid var(--panelBorder);
+      backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+      color:var(--text);
+      font:600 13px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+    }
+    #bar .left, #bar .right{
+      display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    }
+    #title{
+      max-width:38vw;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      color:var(--muted);
+      font-weight:700;
+    }
+
+    button, a.btn {
+      border:1px solid var(--btnBorder);
+      background:var(--btn);
+      color:var(--text);
+      border-radius:12px;
+      padding:8px 10px;
+      font:700 12px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+      cursor:pointer;
+      transition:transform .12s ease, background .12s ease;
+      text-decoration:none;
+      display:inline-flex; align-items:center; justify-content:center;
+      user-select:none;
+    }
+    button:hover, a.btn:hover { transform:translateY(-1px); background:var(--btnHover); }
+    button:active, a.btn:active { transform:translateY(0); }
+
+    input[type="range"]{ width:180px; }
+
+    /* Viewer area */
+    #wrap{
+      position:fixed; inset:0;
+      padding-top:66px; /* toolbar space */
+      overflow:auto;
+      -webkit-overflow-scrolling:touch;
+    }
+    #stage{
+      display:flex; justify-content:center;
+      padding:18px 14px 50px;
+    }
+    canvas{
+      border-radius:14px;
+      box-shadow:0 16px 50px rgba(0,0,0,.55);
+      background:#fff;
+      touch-action:manipulation;
+    }
+
+    #hint{
+      position:fixed; bottom:12px; left:12px; right:12px; z-index:10;
+      color:var(--muted);
+      font:500 12px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+      text-align:center;
+      pointer-events:none;
+    }
+
+    @media (max-width:560px){
+      input[type="range"]{ width:120px; }
+      #title{ max-width:60vw; }
+      #hint{ display:none; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="bar">
+    <div class="left">
+      <button id="prev" title="Previous page">◀</button>
+      <button id="next" title="Next page">▶</button>
+      <span id="page">Page 1</span>
+      <span id="title">PDF</span>
+    </div>
+
+    <div class="right">
+      <button id="zoomOut" title="Zoom out">−</button>
+      <input id="zoom" type="range" min="50" max="300" value="120" />
+      <button id="zoomIn" title="Zoom in">+</button>
+      <span id="zoomLabel">120%</span>
+      <a id="openPdf" class="btn" target="_blank" rel="noopener">Open PDF</a>
+    </div>
+  </div>
+
+  <div id="wrap">
+    <div id="stage"><canvas id="c"></canvas></div>
+  </div>
+
+  <div id="hint">Tip: Ctrl/⌘ + mouse wheel = smooth zoom. Trackpad pinch-to-zoom also works in many browsers.</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
 <script>
   // ====== CONFIG ======
   // Put the PDF in the SAME repo folder as index.html and name it exactly: ch7.pdf
@@ -132,3 +248,4 @@
     if ((e.ctrlKey || e.metaKey) && e.key === "-") { e.preventDefault(); setScale(scale - 0.12); }
   });
 </script>
+  
